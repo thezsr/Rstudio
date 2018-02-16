@@ -1,0 +1,100 @@
+---
+title: "SoNA18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+libraries to be used
+```{r}
+library(pdftools)
+library(tidytext)
+library(dplyr)
+library(ggplot2)
+library(wordcloud)
+```
+
+
+Setting up the URL & cleaning the data
+```{r}
+url <- "http://ghana.gov.gh/images/documents/state_of_the_address_akufo_addo_2018.pdf"
+
+txt <- pdf_text(url)
+
+txtm <- gsub("[[:cntrl:]]|[[:punct:]]"," ", txt)
+```
+
+Unnesting sentences into tokens
+```{r}
+dt <- data_frame(ch = seq_along(txtm), txtm)
+
+tkns <- dt %>% 
+  unnest_tokens(word, txtm, to_lower = TRUE)
+
+head(tkns)
+```
+
+Confirming if strong is the last token created
+```{r}
+length(tkns$word)
+tkns$word[8305]
+
+```
+
+###Removing the heading of the SPEECH
+
+```{r}
+tkns$word[1]
+
+which(tkns$word == "accra")
+#First instance of Accra occurs at row 29
+
+txtR <- tkns[-c(1:29),] #removing rows 1 to 29. Hence nrows = 8276
+```
+
+
+Removing StopWords and sort in descending order
+```{r}
+textNew <- txtR %>% 
+  anti_join(stop_words) %>% 
+  count(word, sort = TRUE) 
+```
+
+## Including Plots
+
+
+```{r,  fig.align='center'}
+ggplot(data = textNew[1:10,], aes(x = reorder(word,n), y = n, fill = word)) +
+  geom_bar(stat = "identity") +
+  labs(title = "NADAA's SoNA", x = "Frequently Used Words w/out stopwords") +
+  coord_flip()
+```
+
+```{r}
+wordcloud(textNew$word,freq = textNew$n, random.color = TRUE, max.words = 100,
+                   colors = sample(colors()[2:128], 5))
+```
+
+##SENTIMENT ANALYSIS
+```{r}
+txt.sem <- txtR %>% 
+  inner_join(get_sentiments("bing")) %>% 
+  count(word, sentiment, sort = TRUE) %>% 
+  ungroup()
+```
+
+```{r}
+txt.sem %>% 
+  group_by(sentiment) %>% 
+  top_n(10) %>% 
+  ungroup() %>% 
+  ggplot(mapping = aes(x = reorder(word, n), y = n, fill = sentiment)) +
+  geom_col() +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(y = "contribution", x = NULL) +
+  coord_flip()
+```
+
