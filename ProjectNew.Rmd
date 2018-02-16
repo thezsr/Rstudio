@@ -1,0 +1,232 @@
+---
+title: "ProjectNew"
+author: "Reginald"
+date: "February 16, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+Loading libraries
+```{r}
+library(recipes)
+library(caret)
+library(pROC)
+library(lime)
+library(corrplot)
+```
+
+Reading Data
+```{r}
+url <- "http://archive.ics.uci.edu/ml/machine-learning-databases/ionosphere/ionosphere.data"
+
+iono <- read.csv(url, header = FALSE)
+```
+
+## Cleaning Data
+```{r}
+#checking if V1 & V2 have unique values
+unique(iono$V2); unique(iono$V1) 
+
+#deleting V2 since it has only 0 values
+iono$V2 <- NULL  
+```
+
+### Checking Missing Values
+```{r}
+apply(is.na(iono), 2, sum)
+```
+
+###proportions of levels for V35
+```{r}
+prop.table(table(iono$V35))  
+```
+
+### renaming categories of dependent variable
+```{r}
+iono <- iono %>% 
+  mutate_at(.vars = vars(V35), .funs = funs(recode(.,"b" = "bad", "g" = "good")))
+```
+
+
+## Plots
+
+```{r}
+ggplot(aes(x = V35), data = iono) +
+  geom_bar()
+```
+
+
+## Data Preprocessing
+
+### Data Splitting
+```{r}
+set.seed(1234)
+indx <- createDataPartition(iono$V35, times = 1, p = .7, list = FALSE)
+
+trng <- iono[indx,]  #training data
+tstng <- iono[-indx,]    #testing data
+
+prop.table(table(trng$V35))
+
+```
+
+
+### Data Preparation
+```{r}
+corr.rcp <- cor(trng[,1:25])
+corrplot::corrplot(corr.rcp)
+
+rcp <- recipe(V35 ~., data = iono) 
+
+preproc <- rcp %>% 
+  step_corr(all_predictors(), -all_outcomes(), threshold = .6) %>% 
+  step_center(all_numeric()) %>% 
+  step_scale(all_numeric()) %>%
+  prep(data = trng)
+
+trng.data <- bake(preproc, trng)  #defining the training data
+
+tstng.data <- bake(preproc, tstng)  #defining the test data by the results of the training data
+```
+
+
+## Data Analysis
+
+### Decision Tree
+
+```{r}
+library(rpart)
+library(rpart.plot)
+
+set.seed(123)
+dtree <- rpart(V35 ~., data = trng.data, method = "class", control = rpart.control(cp = -1) )
+plotcp(dtree); printcp(dtree)  #tuning the number of splits
+
+#pruning the tree
+pfit<- prune(dtree, cp= dtree$cptable[which.min(dtree$cptable[,"xerror"]),"CP"])
+
+plot(pfit, uniform = TRUE); text(pfit)
+rpart.plot(pfit, extra = 100)
+
+test.dtree <- predict(pfit, tstng.data, type = "class")
+
+confusionMatrix(test.dtree, tstng.data$V35, positive = "good")
+#Accuracy = 91.35%
+
+dprb <- predict(pfit, tstng.data, type = "prob")
+
+
+auc(tstng.data$V35, dprb[,2])
+plot(roc(tstng.data$V35, dprb[,2]))
+```
+
+
+### RANDOM FOREST
+
+```{r}
+set.seed(123)
+
+#Creating a control which allows the class probabilities to calculate AUC, and a 10 fold CV
+CVctrl = trainControl(method = "cv", number = 10,summaryFunction = twoClassSummary, classProbs = TRUE)
+
+ngrid = expand.grid(mtry = c(2:6))  #multiple number of variables available for splitting at each tree node
+rfrst <- train(V35 ~., data = trng.data, method = "rf", trcontrol = CVctrl, tuneGrid = ngrid, 
+               importance = TRUE)
+
+plot(rfrst); print(rfrst)   #tuning the number of available variables for splitting 
+vf <- varImp(rfrst)
+plot(vf)   #plotting the important predictor variables
+
+test.rf <- predict(rfrst, tstng.data)  #predicted values of model
+confusionMatrix(test.rf, tstng.data$V35, positive = "good")
+#Accuracy = 94.23%
+
+test.rfprob <- predict(rfrst, tstng.data, type = "prob")  #predicted class probs to be used for AUC
+
+
+rf.auc <- auc(tstng.data$V35, test.rfprob[,2])
+plot(roc(tstng.data$V35, test.rfprob[,2]))
+#AUC = 98.65%
+```
+
+### BOOSTED TREE
+```{r}
+
+set.seed(123)
+
+xg <- train(V35~., data = trng.data, method = "xgbTree", trcontrol = CVctrl, importance = TRUE)
+
+vx <- varImp(xg)
+plot(vx, main = "Boosted trees")
+
+test.xg <- predict(xg, tstng.data)
+confusionMatrix(test.xg, tstng.data$V35, positive = "good")
+#Accuracy 93.27%
+
+xgprb <- predict(xg, tstng.data, type = "prob")
+
+
+auc(tstng.data$V35, xgprb[,2])
+plot(roc(tstng.data$V35, xgprb[,2]))
+#AUC = 97.7%
+
+stopCluster(cl)
+```
+
+###KNN
+```{r}
+n.grid <- expand.grid(k = c(1:20))
+iono.kn <- train(V35~., data = trng.data, method = "knn", trControl = CVctrl, tuneGrid = n.grid)
+plot(iono.kn)
+
+test.knn <- predict(iono.kn, tstng.data)
+confusionMatrix(test.knn, tstng.data$V35, positive = "good")
+#Accuracy: 82.69%
+
+knn.prb <- predict(iono.kn, tstng.data, type = "prob")
+
+
+auc(tstng.data$V35, knn.prb[,2])
+plot(roc(tstng.data$V35, knn.prb[,2]))
+#AUC = 96.37%
+```
+
+
+## FEATURE SELECTION
+```{r}
+#lime needs data without dependent variable
+
+train_x <- dplyr::select(trng.data, -V35)
+test_x <- dplyr::select(tstng.data, -V35)
+
+train_y <- dplyr::select(trng.data, V35)
+test_y <- dplyr::select(tstng.data, V35)
+
+
+
+#building explainer 
+#continuos variables should be binned in 5 groups & evenly spread over the training data. Hence n_bins = 5, q_bins = T
+expl <- lime(train_x, rfrst, n_bins = 5, quantile_bins = TRUE)
+
+#explaining the two categories of the test data's dependent variable looking at the top 2 
+ft <- explain(test_x, explainer = expl, n_features = 5, n_labels = 1, feature_select = "forward_selection")
+
+
+ft %>% 
+  ggplot(aes(x = model_r2, fill = label)) + 
+  geom_density(alpha =.5)
+
+plot_features(ft[1:50,], ncol = 3)
+
+
+```
+
