@@ -78,7 +78,7 @@ wordcloud(textNew$word,freq = textNew$n, random.color = TRUE, max.words = 100,
                    colors = sample(colors()[2:128], 5))
 ```
 
-##SENTIMENT ANALYSIS
+## SENTIMENT ANALYSIS
 ```{r}
 txt.sem <- txtR %>% 
   inner_join(get_sentiments("bing")) %>% 
